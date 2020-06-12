@@ -38,14 +38,19 @@
 // header files
 #include "Main.h"
 
+// global variables are guaranteed to be initialized to zero
+BOOL gGameIsRunning; // g prefix denotes global
+HANDLE gGameWindow;
+GAMEBITMAP gDrawingSurface;
+
 
 // Even though we don't use 32 bit computers anymore we still use 
 // the name win32. The curse of having a good name. Despite it actually
 // being 64 bit we still refer to the API as win32. 
-INT WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR CommandLine, INT CmdShow)
+INT __stdcall WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR CommandLine, INT CmdShow)
 {
 	// disable 	warnings? need to clarify what this block does
-	//UNREFERENCED_PARAMETER(Instance);
+	UNREFERENCED_PARAMETER(Instance);
 	UNREFERENCED_PARAMETER(PreviousInstance);
 	UNREFERENCED_PARAMETER(CommandLine);
 	UNREFERENCED_PARAMETER(CmdShow);
@@ -59,8 +64,54 @@ INT WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR CommandLine, IN
 	if (CreateMainGameWindow(NULL) != ERROR_SUCCESS)
 		goto Exit;
 
+	gDrawingSurface.BitmapInfo.bmiHeader.biSize = sizeof(gDrawingSurface.BitmapInfo.bmiHeader);
+	gDrawingSurface.BitmapInfo.bmiHeader.biWidth = GAME_RES_WIDTH;
+	gDrawingSurface.BitmapInfo.bmiHeader.biHeight = GAME_RES_HEIGHT;
+	gDrawingSurface.BitmapInfo.bmiHeader.biBitCount = GAME_BPP;
+	gDrawingSurface.BitmapInfo.bmiHeader.biCompression = BI_RGB;
+	gDrawingSurface.BitmapInfo.bmiHeader.biPlanes = 1;
+
+	// VirtualAlloc() reserves memory in pretty large chunks, use it when allocating for large amounts
+	// HeapAlloc() should be used when reserving small chunks of memory
+	
+	// Allocate game memory
+	gDrawingSurface.Memory = VirtualAlloc(NULL, GAME_DRAWING_AREA_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	
+	// Test if memory allocation was successful
+	if (gDrawingSurface.Memory == NULL)
+	{
+		MessageBox(NULL, "Failed to allocate memory for drawing surface!", "Error!", MB_ICONEXCLAMATION | MB_OK);
+
+		return 0;
+	}
 
 	MSG Message = { 0 }; // init all messages to 0 to avoid any message errors
+
+	// 
+	gGameIsRunning = TRUE; 
+
+	while (gGameIsRunning == TRUE)
+	{
+		// PeekMessageA() takes a look in the message queue
+		// and if nothing is in the queue it will continue to run.
+		//
+		// PM_REMOVE will remove the message from queue and then
+		// the message will be dispatched.
+		while (PeekMessageA(&Message, gGameWindow, 0, 0, PM_REMOVE))
+		{
+			DispatchMessageA(&Message);
+		}
+
+		// Every 16.67 ms this function is called to achieve 60 FPS.
+		ProcessPlayerInput();
+
+		//RenderFrameGraphics();
+
+		// Allows other threads to run, but lacks stability. Setting
+		// Sleep() to 1 significantly decreases CPU usage.
+		Sleep(1);
+
+	}
 
 	while (GetMessageA(&Message, NULL, 0, 0) > 0)
 	{
@@ -90,9 +141,12 @@ LRESULT CALLBACK MainWindowProc(
 	{
 		case WM_CLOSE:
 		{
-			// put another window message into queue that is 0
-			// purpose: to send 0 to while loop GetMessageA to end the loop
+			// Put another window message into queue that is 0.
+			//
+			// Purpose: To send 0 to while loop GetMessageA to end the loop.
 			PostQuitMessage(0);
+
+			gGameIsRunning = FALSE;
 
 			break;
 		}
@@ -114,7 +168,9 @@ DWORD CreateMainGameWindow(void)
 
 	// when programming in windows, everything is a window
 	WNDCLASSEXA WindowClass = { 0 };
-	HWND WindowHandle = 0;
+	
+	// removed to fix messaging issue, replaced with gGameWindow
+	//HWND WindowHandle = 0;
 
 	// 0xccccccccccccccc is the op code for init(3) which kicks the line into debug mode
 	WindowClass.cbSize = sizeof(WNDCLASSEXA);
@@ -153,7 +209,7 @@ DWORD CreateMainGameWindow(void)
 		goto Exit;
 	}
 
-	WindowHandle = CreateWindowEx(
+	gGameWindow = CreateWindowEx(
 		WS_EX_CLIENTEDGE,
 		WindowClass.lpszClassName,
 		"Gimme Dog Pics", // title of the window
@@ -161,15 +217,15 @@ DWORD CreateMainGameWindow(void)
 		WS_VISIBLE, // show window without using ShowWindow()
 		CW_USEDEFAULT,
 		CW_USEDEFAULT,
-		240,
-		120,
+		640,
+		480,
 		NULL,
 		NULL,
 		GetModuleHandleA(NULL),
 		NULL
 	);
 
-	if (WindowHandle == NULL)
+	if (gGameWindow == NULL)
 	{
 		// need to fix this by adding an error code
 		Result = GetLastError();
@@ -195,3 +251,21 @@ BOOL GameIsAlreadyRunning(void)
 		return FALSE;
 
 }
+
+void ProcessPlayerInput(void)
+{
+	 short EscapeKeyIsDown = GetAsyncKeyState(VK_ESCAPE);
+
+	 if (EscapeKeyIsDown)
+	 {
+		 SendMessageA(gGameWindow, WM_CLOSE, 0, 0);
+	 }
+}
+
+void RenderFrameGraphics(void)
+{
+
+}
+
+
+
