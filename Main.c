@@ -26,6 +26,7 @@
 */
 
 #include <stdio.h>
+#include <stdint.h>
 
 // telling compiler to behave in a certain way
 // adjust warning levels within source code without
@@ -41,7 +42,10 @@
 // global variables are guaranteed to be initialized to zero
 BOOL gGameIsRunning; // g prefix denotes global
 HANDLE gGameWindow;
-GAMEBITMAP gDrawingSurface;
+GAMEBITMAP gBackBuffer;
+
+// initializing structure is strange here because this wants the data type cbSize
+MONITORINFO gMonitorInfo = { sizeof(MONITORINFO) }; // used to get more details about the display
 
 
 // Even though we don't use 32 bit computers anymore we still use 
@@ -64,26 +68,29 @@ INT __stdcall WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR Comma
 	if (CreateMainGameWindow(NULL) != ERROR_SUCCESS)
 		goto Exit;
 
-	gDrawingSurface.BitmapInfo.bmiHeader.biSize = sizeof(gDrawingSurface.BitmapInfo.bmiHeader);
-	gDrawingSurface.BitmapInfo.bmiHeader.biWidth = GAME_RES_WIDTH;
-	gDrawingSurface.BitmapInfo.bmiHeader.biHeight = GAME_RES_HEIGHT;
-	gDrawingSurface.BitmapInfo.bmiHeader.biBitCount = GAME_BPP;
-	gDrawingSurface.BitmapInfo.bmiHeader.biCompression = BI_RGB;
-	gDrawingSurface.BitmapInfo.bmiHeader.biPlanes = 1;
+	// setup drawing surface (back buffer?)
+	gBackBuffer.BitmapInfo.bmiHeader.biSize = sizeof(gBackBuffer.BitmapInfo.bmiHeader);
+	gBackBuffer.BitmapInfo.bmiHeader.biWidth = GAME_RES_WIDTH;
+	gBackBuffer.BitmapInfo.bmiHeader.biHeight = GAME_RES_HEIGHT;
+	gBackBuffer.BitmapInfo.bmiHeader.biBitCount = GAME_BPP;
+	gBackBuffer.BitmapInfo.bmiHeader.biCompression = BI_RGB;
+	gBackBuffer.BitmapInfo.bmiHeader.biPlanes = 1;
 
 	// VirtualAlloc() reserves memory in pretty large chunks, use it when allocating for large amounts
 	// HeapAlloc() should be used when reserving small chunks of memory
 	
 	// Allocate game memory
-	gDrawingSurface.Memory = VirtualAlloc(NULL, GAME_DRAWING_AREA_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	gBackBuffer.Memory = VirtualAlloc(NULL, GAME_DRAWING_AREA_MEMORY_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 	
 	// Test if memory allocation was successful
-	if (gDrawingSurface.Memory == NULL)
+	if (gBackBuffer.Memory == NULL)
 	{
 		MessageBox(NULL, "Failed to allocate memory for drawing surface!", "Error!", MB_ICONEXCLAMATION | MB_OK);
 
 		return 0;
 	}
+
+	memset(gBackBuffer.Memory, 0x7F, GAME_DRAWING_AREA_MEMORY_SIZE);
 
 	MSG Message = { 0 }; // init all messages to 0 to avoid any message errors
 
@@ -105,7 +112,7 @@ INT __stdcall WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR Comma
 		// Every 16.67 ms this function is called to achieve 60 FPS.
 		ProcessPlayerInput();
 
-		//RenderFrameGraphics();
+		RenderFrameGraphics();
 
 		// Allows other threads to run, but lacks stability. Setting
 		// Sleep() to 1 significantly decreases CPU usage.
@@ -168,6 +175,7 @@ DWORD CreateMainGameWindow(void)
 
 	// when programming in windows, everything is a window
 	WNDCLASSEXA WindowClass = { 0 };
+
 	
 	// removed to fix messaging issue, replaced with gGameWindow
 	//HWND WindowHandle = 0;
@@ -194,7 +202,8 @@ DWORD CreateMainGameWindow(void)
 
 	WindowClass.hCursor = LoadCursor(NULL, IDC_ARROW);
 
-	WindowClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+	// Using purple color for debugging purposes
+	WindowClass.hbrBackground = CreateSolidBrush(RGB(255, 0, 255));
 
 	WindowClass.lpszMenuName = NULL; // used for drop down menus in window
 
@@ -234,6 +243,18 @@ DWORD CreateMainGameWindow(void)
 
 		goto Exit;
 	}
+	
+	// default to primary monitor if gGameWindow is not available
+	// then send info to MonitorInfo struct
+	if (GetMonitorInfoA(MonitorFromWindow(gGameWindow, MONITOR_DEFAULTTOPRIMARY), &gMonitorInfo) == 0)
+	{
+		Result = ERROR_MONITOR_NO_DESCRIPTOR;
+
+		goto Exit;
+	}
+
+	int MonitorWidth = gMonitorInfo.rcMonitor.right - gMonitorInfo.rcMonitor.left;
+	int MonitorHeight = gMonitorInfo.rcMonitor.bottom - gMonitorInfo.rcMonitor.top;
 
 Exit:
 	return Result;
@@ -264,7 +285,13 @@ void ProcessPlayerInput(void)
 
 void RenderFrameGraphics(void)
 {
+	// when getting device context always remember to release it
+	HDC DeviceContext = GetDC(gGameWindow);
 
+	// DI = Device Independent
+	StretchDIBits(DeviceContext, 0, 0, 100, 100, 0, 0, 100, 100, gBackBuffer.Memory, &gBackBuffer.BitmapInfo, DIB_RGB_COLORS, SRCCOPY);
+
+	ReleaseDC(gGameWindow, DeviceContext);
 }
 
 
