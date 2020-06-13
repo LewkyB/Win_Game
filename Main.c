@@ -47,6 +47,9 @@ GAMEBITMAP gBackBuffer;
 // initializing structure is strange here because this wants the data type cbSize
 MONITORINFO gMonitorInfo = { sizeof(MONITORINFO) }; // used to get more details about the display
 
+// Manifest file I/O has been set to "Per Monitor High DPI Aware"
+int32_t gMonitorWidth;
+int32_t gMonitorHeight;
 
 // Even though we don't use 32 bit computers anymore we still use 
 // the name win32. The curse of having a good name. Despite it actually
@@ -208,6 +211,12 @@ DWORD CreateMainGameWindow(void)
 	WindowClass.lpszMenuName = NULL; // used for drop down menus in window
 
 	WindowClass.lpszClassName = GAME_NAME "_WINDOWCLASS";
+	
+	// REMOVED AFTER CHANGING MANIFEST FILE DPI SETTINGS
+	//
+	// ignore virtual resolution and get display's actual resolution
+	//SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	
 	// register window class with windows
 	if (RegisterClassExA(&WindowClass) == 0) // look up the doc of the function before deciding boolean results
 	{
@@ -249,12 +258,27 @@ DWORD CreateMainGameWindow(void)
 	if (GetMonitorInfoA(MonitorFromWindow(gGameWindow, MONITOR_DEFAULTTOPRIMARY), &gMonitorInfo) == 0)
 	{
 		Result = ERROR_MONITOR_NO_DESCRIPTOR;
-
 		goto Exit;
 	}
 
-	int MonitorWidth = gMonitorInfo.rcMonitor.right - gMonitorInfo.rcMonitor.left;
-	int MonitorHeight = gMonitorInfo.rcMonitor.bottom - gMonitorInfo.rcMonitor.top;
+	// calculate monitor screen resolution using manifest file with DPI settings
+	gMonitorWidth = gMonitorInfo.rcMonitor.right - gMonitorInfo.rcMonitor.left;
+	gMonitorHeight = gMonitorInfo.rcMonitor.bottom - gMonitorInfo.rcMonitor.top;
+
+	// change window behavior to frameless and remove title bar
+	// bitwise operations here achieve multiple window settings at once
+	if (SetWindowLongPtrA(gGameWindow, GWL_STYLE, (WS_OVERLAPPEDWINDOW | WS_VISIBLE) & ~WS_OVERLAPPEDWINDOW) == 0)
+	{
+		Result = GetLastError();
+		goto Exit;
+	}
+
+	// set window to fullscreen
+	if (SetWindowPos(gGameWindow, HWND_TOP, gMonitorInfo.rcMonitor.left, gMonitorInfo.rcMonitor.top, gMonitorWidth, gMonitorHeight, SWP_NOOWNERZORDER | SWP_FRAMECHANGED) == 0)
+	{
+		Result = GetLastError();
+		goto Exit;
+	}
 
 Exit:
 	return Result;
@@ -270,26 +294,53 @@ BOOL GameIsAlreadyRunning(void)
 		return TRUE;
 	else
 		return FALSE;
-
 }
 
 void ProcessPlayerInput(void)
 {
-	 short EscapeKeyIsDown = GetAsyncKeyState(VK_ESCAPE);
+	 int16_t EscapeKeyIsDown = GetAsyncKeyState(VK_ESCAPE);
 
 	 if (EscapeKeyIsDown)
-	 {
 		 SendMessageA(gGameWindow, WM_CLOSE, 0, 0);
-	 }
 }
 
 void RenderFrameGraphics(void)
 {
+	//memset(gBackBuffer.Memory, 0xFF, (GAME_RES_HEIGHT * 4)*4);
+
+	PIXEL32 Pixel = { 0 };
+	Pixel.Blue = 0xff;
+	Pixel.Green = 0;
+	Pixel.Red = 0;
+	Pixel.Alpha = 0xff;
+
+	for (int x = 0; x < GAME_RES_WIDTH * GAME_RES_HEIGHT; x++)
+	{
+		memcpy((PIXEL32*)gBackBuffer.Memory + x, &Pixel, sizeof(PIXEL32));
+	}
+
+
 	// when getting device context always remember to release it
 	HDC DeviceContext = GetDC(gGameWindow);
 
 	// DI = Device Independent
-	StretchDIBits(DeviceContext, 0, 0, 100, 100, 0, 0, 100, 100, gBackBuffer.Memory, &gBackBuffer.BitmapInfo, DIB_RGB_COLORS, SRCCOPY);
+	// destination for this function refers to the monitors
+	// source refers to the game or the backbuffer
+	StretchDIBits(
+		DeviceContext,
+		0,
+		0, 
+		gMonitorWidth,
+		gMonitorHeight, 
+		0,
+		0,
+		GAME_RES_WIDTH,
+		GAME_RES_HEIGHT,
+		gBackBuffer.Memory,
+		&gBackBuffer.BitmapInfo,
+		DIB_RGB_COLORS,
+		SRCCOPY
+	);
 
 	ReleaseDC(gGameWindow, DeviceContext);
 }
