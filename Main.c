@@ -44,12 +44,7 @@ BOOL gGameIsRunning; // g prefix denotes global
 HANDLE gGameWindow;
 GAMEBITMAP gBackBuffer;
 
-// initializing structure is strange here because this wants the data type cbSize
-MONITORINFO gMonitorInfo = { sizeof(MONITORINFO) }; // used to get more details about the display
-
-// Manifest file I/O has been set to "Per Monitor High DPI Aware"
-int32_t gMonitorWidth;
-int32_t gMonitorHeight;
+GAMEPERFDATA gPerformanceData;
 
 // Even though we don't use 32 bit computers anymore we still use 
 // the name win32. The curse of having a good name. Despite it actually
@@ -70,6 +65,10 @@ INT __stdcall WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR Comma
 
 	if (CreateMainGameWindow(NULL) != ERROR_SUCCESS)
 		goto Exit;
+
+	// retrieves frequency of performance counter. that frequency is set at
+	// boot time so it only needs to be queried once on app initialization
+	QueryPerformanceFrequency(&gPerformanceData.PerfFrequency);
 
 	// setup drawing surface (back buffer?)
 	gBackBuffer.BitmapInfo.bmiHeader.biSize = sizeof(gBackBuffer.BitmapInfo.bmiHeader);
@@ -102,6 +101,10 @@ INT __stdcall WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR Comma
 
 	while (gGameIsRunning == TRUE)
 	{
+		// when you want to measure timing this needs to go at the start of whatever 
+		// you intend to time
+		QueryPerformanceCounter(&gPerformanceData.FrameStart);
+
 		// PeekMessageA() takes a look in the message queue
 		// and if nothing is in the queue it will continue to run.
 		//
@@ -117,9 +120,34 @@ INT __stdcall WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR Comma
 
 		RenderFrameGraphics();
 
+		// whenever you start measuring time you also need to end measuring time
+		QueryPerformanceCounter(&gPerformanceData.FrameEnd);
+
+		// calculate time
+		gPerformanceData.ElapsedMicrosecondsPerFrame.QuadPart = gPerformanceData.FrameEnd.QuadPart - gPerformanceData.FrameStart.QuadPart;
+		gPerformanceData.ElapsedMicrosecondsPerFrame.QuadPart *= 1000000;
+		gPerformanceData.ElapsedMicrosecondsPerFrame.QuadPart /= gPerformanceData.PerfFrequency.QuadPart;
+
 		// Allows other threads to run, but lacks stability. Setting
 		// Sleep() to 1 significantly decreases CPU usage.
+		// does not actually sleep for 1ms. the windows system clock is approx. 15ms cycles
+		// so it will go to sleep and windows will do stuff, come back and say you've 
+		// been asleep at least 1ms so you can wake back up
 		Sleep(1);
+
+		gPerformanceData.TotalFramesRendered++;
+
+		if (gPerformanceData.TotalFramesRendered % CALCULATE_AVG_FPS_EVERY_X_FRAMES == 0)
+		{
+			char str[64] = { 0 }; // temporary string
+			
+			// _TRUNCATE means this function will only copy as much data as will fit in the string
+			// leaving the destination buffer null-terminated
+			_snprintf_s(str, _countof(str), _TRUNCATE, "Elapsed microseconds: %lli\n", gPerformanceData.ElapsedMicrosecondsPerFrame.QuadPart);
+
+			OutputDebugStringA();
+		}
+
 
 	}
 
@@ -228,7 +256,7 @@ DWORD CreateMainGameWindow(void)
 	}
 
 	gGameWindow = CreateWindowEx(
-		WS_EX_CLIENTEDGE,
+		0, // disables extended window style
 		WindowClass.lpszClassName,
 		"Gimme Dog Pics", // title of the window
 		WS_OVERLAPPEDWINDOW | // window is an overlapped window meaning has title bar, border, and client area
@@ -253,17 +281,19 @@ DWORD CreateMainGameWindow(void)
 		goto Exit;
 	}
 	
+	gPerformanceData.MonitorInfo.cbSize = sizeof(MONITORINFO);
+
 	// default to primary monitor if gGameWindow is not available
 	// then send info to MonitorInfo struct
-	if (GetMonitorInfoA(MonitorFromWindow(gGameWindow, MONITOR_DEFAULTTOPRIMARY), &gMonitorInfo) == 0)
+	if (GetMonitorInfoA(MonitorFromWindow(gGameWindow, MONITOR_DEFAULTTOPRIMARY), &gPerformanceData.MonitorInfo) == 0)
 	{
 		Result = ERROR_MONITOR_NO_DESCRIPTOR;
 		goto Exit;
 	}
 
 	// calculate monitor screen resolution using manifest file with DPI settings
-	gMonitorWidth = gMonitorInfo.rcMonitor.right - gMonitorInfo.rcMonitor.left;
-	gMonitorHeight = gMonitorInfo.rcMonitor.bottom - gMonitorInfo.rcMonitor.top;
+	gPerformanceData.MonitorWidth = gPerformanceData.MonitorInfo.rcMonitor.right - gPerformanceData.MonitorInfo.rcMonitor.left;
+	gPerformanceData.MonitorHeight = gPerformanceData.MonitorInfo.rcMonitor.bottom - gPerformanceData.MonitorInfo.rcMonitor.top;
 
 	// change window behavior to frameless and remove title bar
 	// bitwise operations here achieve multiple window settings at once
@@ -274,7 +304,14 @@ DWORD CreateMainGameWindow(void)
 	}
 
 	// set window to fullscreen
-	if (SetWindowPos(gGameWindow, HWND_TOP, gMonitorInfo.rcMonitor.left, gMonitorInfo.rcMonitor.top, gMonitorWidth, gMonitorHeight, SWP_NOOWNERZORDER | SWP_FRAMECHANGED) == 0)
+	if (SetWindowPos(
+		gGameWindow, 
+		HWND_TOP,
+		gPerformanceData.MonitorInfo.rcMonitor.left,
+		gPerformanceData.MonitorInfo.rcMonitor.top,
+		gPerformanceData.MonitorWidth,
+		gPerformanceData.MonitorHeight, 
+		SWP_NOOWNERZORDER | SWP_FRAMECHANGED) == 0)
 	{
 		Result = GetLastError();
 		goto Exit;
@@ -309,14 +346,14 @@ void RenderFrameGraphics(void)
 	//memset(gBackBuffer.Memory, 0xFF, (GAME_RES_HEIGHT * 4)*4);
 
 	PIXEL32 Pixel = { 0 };
-	Pixel.Blue = 0xff;
-	Pixel.Green = 0;
+	Pixel.Blue = 0;
+	Pixel.Green = 0x7f;
 	Pixel.Red = 0;
 	Pixel.Alpha = 0xff;
 
 	for (int x = 0; x < GAME_RES_WIDTH * GAME_RES_HEIGHT; x++)
 	{
-		memcpy((PIXEL32*)gBackBuffer.Memory + x, &Pixel, sizeof(PIXEL32));
+		memcpy_s((PIXEL32*)gBackBuffer.Memory + x, sizeof(PIXEL32), &Pixel, sizeof(PIXEL32));
 	}
 
 
@@ -330,8 +367,8 @@ void RenderFrameGraphics(void)
 		DeviceContext,
 		0,
 		0, 
-		gMonitorWidth,
-		gMonitorHeight, 
+		gPerformanceData.MonitorWidth,
+		gPerformanceData.MonitorHeight, 
 		0,
 		0,
 		GAME_RES_WIDTH,
